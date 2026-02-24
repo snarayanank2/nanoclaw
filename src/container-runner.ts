@@ -145,6 +145,10 @@ function buildVolumeMounts(
   fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
   fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+  // Explicitly chmod so the container's node user (uid 1000) can delete IPC files.
+  // mkdirSync mode is subject to umask (022 → 755); chmodSync bypasses umask.
+  // Without sticky bit on a 777 dir, any user can unlink any file regardless of ownership.
+  fs.chmodSync(path.join(groupIpcDir, 'input'), 0o777);
   mounts.push({
     hostPath: groupIpcDir,
     containerPath: '/workspace/ipc',
