@@ -85,7 +85,7 @@ async function syncGroups(projectRoot: string): Promise<void> {
   let syncOk = false;
   try {
     const syncScript = `
-import makeWASocket, { useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers, fetchLatestWaWebVersion } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import path from 'path';
 import fs from 'fs';
@@ -110,7 +110,10 @@ const upsert = db.prepare(
 
 const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
+const { version } = await fetchLatestWaWebVersion({}).catch(() => ({ version: undefined }));
+
 const sock = makeWASocket({
+  version,
   auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
   printQRInTerminal: false,
   logger,
@@ -123,6 +126,8 @@ const timeout = setTimeout(() => {
 }, 30000);
 
 sock.ev.on('creds.update', saveCreds);
+
+let done = false;
 
 sock.ev.on('connection.update', async (update) => {
   if (update.connection === 'open') {
@@ -140,12 +145,14 @@ sock.ev.on('connection.update', async (update) => {
     } catch (err) {
       console.error('FETCH_ERROR:' + err.message);
     } finally {
+      done = true;
       clearTimeout(timeout);
-      sock.end(undefined);
       db.close();
+      sock.end(undefined);
       process.exit(0);
     }
   } else if (update.connection === 'close') {
+    if (done) return;
     clearTimeout(timeout);
     console.error('CONNECTION_CLOSED');
     process.exit(1);
@@ -153,12 +160,19 @@ sock.ev.on('connection.update', async (update) => {
 });
 `;
 
-    const output = execSync(`node --input-type=module -e ${JSON.stringify(syncScript)}`, {
-      cwd: projectRoot,
-      encoding: 'utf-8',
-      timeout: 45000,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
+    const tmpFile = path.join(projectRoot, 'store', 'sync-groups-tmp.mjs');
+    fs.writeFileSync(tmpFile, syncScript, 'utf-8');
+    let output: string;
+    try {
+      output = execSync(`node ${JSON.stringify(tmpFile)}`, {
+        cwd: projectRoot,
+        encoding: 'utf-8',
+        timeout: 45000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } finally {
+      fs.rmSync(tmpFile, { force: true });
+    }
     syncOk = output.includes('SYNCED:');
     logger.info({ output: output.trim() }, 'Sync output');
   } catch (err) {
