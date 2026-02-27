@@ -17,7 +17,10 @@ function parseArgs(args: string[]): { list: boolean; limit: number } {
   let limit = 30;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--list') list = true;
-    if (args[i] === '--limit' && args[i + 1]) { limit = parseInt(args[i + 1], 10); i++; }
+    if (args[i] === '--limit' && args[i + 1]) {
+      limit = parseInt(args[i + 1], 10);
+      i++;
+    }
   }
   return { list, limit };
 }
@@ -43,12 +46,14 @@ async function listGroups(limit: number): Promise<void> {
   }
 
   const db = new Database(dbPath, { readonly: true });
-  const rows = db.prepare(
-    `SELECT jid, name FROM chats
+  const rows = db
+    .prepare(
+      `SELECT jid, name FROM chats
      WHERE jid LIKE '%@g.us' AND jid <> '__group_sync__' AND name <> jid
      ORDER BY last_message_time DESC
      LIMIT ?`,
-  ).all(limit) as Array<{ jid: string; name: string }>;
+    )
+    .all(limit) as Array<{ jid: string; name: string }>;
   db.close();
 
   for (const row of rows) {
@@ -85,7 +90,7 @@ async function syncGroups(projectRoot: string): Promise<void> {
   let syncOk = false;
   try {
     const syncScript = `
-import makeWASocket, { useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers, fetchLatestWaWebVersion } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, makeCacheableSignalKeyStore, Browsers } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import path from 'path';
 import fs from 'fs';
@@ -110,10 +115,7 @@ const upsert = db.prepare(
 
 const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
-const { version } = await fetchLatestWaWebVersion({}).catch(() => ({ version: undefined }));
-
 const sock = makeWASocket({
-  version,
   auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
   printQRInTerminal: false,
   logger,
@@ -126,8 +128,6 @@ const timeout = setTimeout(() => {
 }, 30000);
 
 sock.ev.on('creds.update', saveCreds);
-
-let done = false;
 
 sock.ev.on('connection.update', async (update) => {
   if (update.connection === 'open') {
@@ -145,14 +145,12 @@ sock.ev.on('connection.update', async (update) => {
     } catch (err) {
       console.error('FETCH_ERROR:' + err.message);
     } finally {
-      done = true;
       clearTimeout(timeout);
-      db.close();
       sock.end(undefined);
+      db.close();
       process.exit(0);
     }
   } else if (update.connection === 'close') {
-    if (done) return;
     clearTimeout(timeout);
     console.error('CONNECTION_CLOSED');
     process.exit(1);
@@ -160,19 +158,15 @@ sock.ev.on('connection.update', async (update) => {
 });
 `;
 
-    const tmpFile = path.join(projectRoot, 'store', 'sync-groups-tmp.mjs');
-    fs.writeFileSync(tmpFile, syncScript, 'utf-8');
-    let output: string;
-    try {
-      output = execSync(`node ${JSON.stringify(tmpFile)}`, {
+    const output = execSync(
+      `node --input-type=module -e ${JSON.stringify(syncScript)}`,
+      {
         cwd: projectRoot,
         encoding: 'utf-8',
         timeout: 45000,
         stdio: ['ignore', 'pipe', 'pipe'],
-      });
-    } finally {
-      fs.rmSync(tmpFile, { force: true });
-    }
+      },
+    );
     syncOk = output.includes('SYNCED:');
     logger.info({ output: output.trim() }, 'Sync output');
   } catch (err) {
@@ -185,9 +179,11 @@ sock.ev.on('connection.update', async (update) => {
   if (fs.existsSync(dbPath)) {
     try {
       const db = new Database(dbPath, { readonly: true });
-      const row = db.prepare(
-        "SELECT COUNT(*) as count FROM chats WHERE jid LIKE '%@g.us' AND jid <> '__group_sync__'",
-      ).get() as { count: number };
+      const row = db
+        .prepare(
+          "SELECT COUNT(*) as count FROM chats WHERE jid LIKE '%@g.us' AND jid <> '__group_sync__'",
+        )
+        .get() as { count: number };
       groupsInDb = row.count;
       db.close();
     } catch {
