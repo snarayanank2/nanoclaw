@@ -3,7 +3,7 @@
 
 FROM node:22-slim
 
-# Install system dependencies for Chromium
+# Install system dependencies for Chromium and native Node.js modules (better-sqlite3)
 RUN apt-get update && apt-get install -y \
     chromium \
     fonts-liberation \
@@ -23,6 +23,9 @@ RUN apt-get update && apt-get install -y \
     libxshmfence1 \
     curl \
     git \
+    python3 \
+    make \
+    g++ \
     && rm -rf /var/lib/apt/lists/*
 
 # Set Chromium path for agent-browser

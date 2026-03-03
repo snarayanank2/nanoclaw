@@ -9,11 +9,29 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import fs from 'fs';
 import path from 'path';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const Database = require('better-sqlite3') as typeof import('better-sqlite3');
 import { CronExpressionParser } from 'cron-parser';
 
 const IPC_DIR = '/workspace/ipc';
 const MESSAGES_DIR = path.join(IPC_DIR, 'messages');
 const TASKS_DIR = path.join(IPC_DIR, 'tasks');
+
+// DB is only available to the main group (project root is mounted at /workspace/project)
+const DB_PATH = '/workspace/project/store/messages.db';
+
+function openDb(): InstanceType<typeof Database> | null {
+  if (!isMain) return null;
+  if (!fs.existsSync(DB_PATH)) return null;
+  try {
+    return new Database(DB_PATH, { readonly: true });
+  } catch {
+    return null;
+  }
+}
 
 // Context from environment variables (set by the agent runner)
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
@@ -276,6 +294,176 @@ Use available_groups.json to find the JID for a group. The folder name should be
 
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
+    };
+  },
+);
+
+server.tool(
+  'list_chats',
+  "Search WhatsApp contacts and groups by name or JID. Use this to find a contact's JID before sending them a message. Main group only.",
+  {
+    query: z.string().optional().describe('Name or JID search (case-insensitive, partial match). Omit to list all.'),
+    is_group: z.boolean().optional().describe('true=groups only, false=individuals only, omit=all'),
+    limit: z.number().int().positive().default(20).describe('Max results to return'),
+  },
+  async (args) => {
+    const db = openDb();
+    if (!db) {
+      return {
+        content: [{ type: 'text' as const, text: 'list_chats is only available in the main group, and requires the messages DB to be accessible.' }],
+        isError: true,
+      };
+    }
+
+    try {
+      const conditions: string[] = ["jid NOT LIKE '%__group_sync__%'"];
+      const params: (string | number)[] = [];
+
+      if (args.query) {
+        conditions.push('(LOWER(name) LIKE LOWER(?) OR LOWER(jid) LIKE LOWER(?))');
+        const q = `%${args.query}%`;
+        params.push(q, q);
+      }
+
+      if (args.is_group === true) {
+        conditions.push('is_group = 1');
+      } else if (args.is_group === false) {
+        conditions.push('is_group = 0');
+      }
+
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      const sql = `SELECT jid, name, last_message_time, channel, is_group FROM chats ${where} ORDER BY last_message_time DESC LIMIT ?`;
+      params.push(args.limit ?? 20);
+
+      const rows = db.prepare(sql).all(...params) as Array<{
+        jid: string; name: string; last_message_time: string; channel: string; is_group: number;
+      }>;
+
+      db.close();
+
+      if (rows.length === 0) {
+        return { content: [{ type: 'text' as const, text: 'No chats found matching your query.' }] };
+      }
+
+      const formatted = rows.map(r =>
+        `JID: ${r.jid}\nName: ${r.name || '(unknown)'}\nType: ${r.is_group ? 'Group' : 'Individual'}\nChannel: ${r.channel || 'whatsapp'}\nLast activity: ${r.last_message_time || 'unknown'}`
+      ).join('\n---\n');
+
+      return { content: [{ type: 'text' as const, text: `Found ${rows.length} chat(s):\n\n${formatted}` }] };
+    } catch (err) {
+      db.close();
+      return {
+        content: [{ type: 'text' as const, text: `Error querying chats: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'query_messages',
+  'Read recent WhatsApp messages across all chats or filtered by a specific chat. Useful for summarizing recent activity, finding tasks, or checking conversations. Main group only.',
+  {
+    hours: z.number().positive().describe('How many hours back to look (e.g. 48 for last 48 hours)'),
+    chat_jid: z.string().optional().describe("Filter to one specific chat — get the JID from list_chats first"),
+    sender_name: z.string().optional().describe('Filter by sender name (partial, case-insensitive match)'),
+    limit: z.number().int().positive().default(300).describe('Max messages to return'),
+  },
+  async (args) => {
+    const db = openDb();
+    if (!db) {
+      return {
+        content: [{ type: 'text' as const, text: 'query_messages is only available in the main group, and requires the messages DB to be accessible.' }],
+        isError: true,
+      };
+    }
+
+    try {
+      const since = new Date(Date.now() - args.hours * 60 * 60 * 1000).toISOString();
+      const conditions: string[] = ['m.timestamp > ?', "m.content != ''", 'm.content IS NOT NULL'];
+      const params: (string | number)[] = [since];
+
+      if (args.chat_jid) {
+        conditions.push('m.chat_jid = ?');
+        params.push(args.chat_jid);
+      }
+
+      if (args.sender_name) {
+        conditions.push('LOWER(m.sender_name) LIKE LOWER(?)');
+        params.push(`%${args.sender_name}%`);
+      }
+
+      const where = `WHERE ${conditions.join(' AND ')}`;
+      const sql = `
+        SELECT m.timestamp, m.sender_name, m.content, m.chat_jid, m.is_from_me, m.is_bot_message,
+               c.name AS chat_name, c.is_group
+        FROM messages m
+        LEFT JOIN chats c ON c.jid = m.chat_jid
+        ${where}
+        ORDER BY m.timestamp ASC
+        LIMIT ?
+      `;
+      params.push(args.limit ?? 300);
+
+      const rows = db.prepare(sql).all(...params) as Array<{
+        timestamp: string; sender_name: string; content: string; chat_jid: string;
+        is_from_me: number; is_bot_message: number; chat_name: string | null; is_group: number;
+      }>;
+
+      db.close();
+
+      if (rows.length === 0) {
+        return { content: [{ type: 'text' as const, text: `No messages found in the last ${args.hours} hours.` }] };
+      }
+
+      const formatted = rows.map(r => {
+        const chatLabel = r.chat_name || r.chat_jid;
+        const chatType = r.is_group ? 'group' : 'DM';
+        const who = r.is_from_me ? 'Me' : r.sender_name;
+        const ts = new Date(r.timestamp).toLocaleString();
+        return `[${ts}] ${chatLabel} (${chatType}) — ${who}: ${r.content}`;
+      }).join('\n');
+
+      return {
+        content: [{ type: 'text' as const, text: `${rows.length} message(s) in the last ${args.hours}h:\n\n${formatted}` }],
+      };
+    } catch (err) {
+      db.close();
+      return {
+        content: [{ type: 'text' as const, text: `Error querying messages: ${err instanceof Error ? err.message : String(err)}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+server.tool(
+  'send_whatsapp_message',
+  "Send a WhatsApp message to any contact or group. Use list_chats first to find the target JID. Main group only.",
+  {
+    target_jid: z.string().describe("WhatsApp JID of the recipient (e.g. '919876543210@s.whatsapp.net' or '120363...@g.us'). Get from list_chats."),
+    text: z.string().describe('Message text to send'),
+  },
+  async (args) => {
+    if (!isMain) {
+      return {
+        content: [{ type: 'text' as const, text: 'send_whatsapp_message is only available in the main group.' }],
+        isError: true,
+      };
+    }
+
+    const data = {
+      type: 'message',
+      chatJid: args.target_jid,
+      text: args.text,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return {
+      content: [{ type: 'text' as const, text: `Message queued for delivery to ${args.target_jid}.` }],
     };
   },
 );
