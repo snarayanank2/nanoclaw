@@ -37,6 +37,12 @@ ENV AGENT_BROWSER_ARGS="--no-sandbox,--disable-setuid-sandbox,--disable-dev-shm-
 # Install agent-browser and claude-code globally
 RUN npm install -g agent-browser@latest @anthropic-ai/claude-code
 
+# Wrap agent-browser with lightweight self-healing:
+# - state load must run on a closed browser daemon
+# - recover once from stale/crashed daemon errors
+RUN mv /usr/local/bin/agent-browser /usr/local/bin/agent-browser-real && \
+    printf '#!/bin/bash\nset -euo pipefail\nREAL_BIN="/usr/local/bin/agent-browser-real"\n\ncleanup_stale_daemon_files() {\n  local dirs=()\n  if [ -n "${AGENT_BROWSER_SOCKET_DIR:-}" ]; then\n    dirs+=("${AGENT_BROWSER_SOCKET_DIR}")\n  fi\n  if [ -n "${XDG_RUNTIME_DIR:-}" ]; then\n    dirs+=("${XDG_RUNTIME_DIR}/agent-browser")\n  fi\n  if [ -n "${HOME:-}" ]; then\n    dirs+=("${HOME}/.agent-browser")\n  fi\n  dirs+=("/tmp/agent-browser")\n\n  for d in "${dirs[@]}"; do\n    [ -d "${d}" ] || continue\n    rm -f "${d}"/*.pid "${d}"/*.sock "${d}"/*.port 2>/dev/null || true\n  done\n}\n\nforce_close() {\n  # Close can be asynchronous; run a few times to flush stale daemon state.\n  for _ in 1 2 3; do\n    "${REAL_BIN}" close >/dev/null 2>&1 || true\n    sleep 1\n  done\n  cleanup_stale_daemon_files\n}\n\n# state load is only valid when the daemon browser is closed\nif [ "${1:-}" = "state" ] && [ "${2:-}" = "load" ]; then\n  force_close\nfi\n\nOUT_FILE="$(mktemp)"\nset +e\n"${REAL_BIN}" "$@" >"${OUT_FILE}" 2>&1\nEXIT_CODE=$?\nset -e\n\nif [ "${EXIT_CODE}" -ne 0 ] && grep -Eq "Target page, context or browser has been closed|Cannot load state while browser is running" "${OUT_FILE}"; then\n  force_close\n  set +e\n  "${REAL_BIN}" "$@" >"${OUT_FILE}" 2>&1\n  EXIT_CODE=$?\n  set -e\nfi\n\ncat "${OUT_FILE}"\nrm -f "${OUT_FILE}"\nexit "${EXIT_CODE}"\n' > /usr/local/bin/agent-browser && chmod +x /usr/local/bin/agent-browser
+
 # Create app directory
 WORKDIR /app
 

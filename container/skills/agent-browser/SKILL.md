@@ -113,9 +113,9 @@ agent-browser click @e3
 agent-browser wait --url "**/dashboard"
 agent-browser state save auth.json
 
-# Later: load saved state
-agent-browser state load auth.json
-agent-browser open https://app.example.com/dashboard
+# Later: restore with state in one open command
+agent-browser close
+agent-browser --state auth.json open https://app.example.com/dashboard
 ```
 
 ### Cookies & Storage
@@ -177,7 +177,7 @@ If a crash happens mid-workflow (e.g. during form submission or login):
 
 1. `agent-browser close` to clean up
 2. `agent-browser open <url>` to start fresh
-3. If you had saved auth state, reload it: `agent-browser state load <file>`
+3. If you had saved auth state, re-open with it: `agent-browser --state <file> open <url>`
 4. Resume the workflow from the beginning
 
 ### Common crash causes

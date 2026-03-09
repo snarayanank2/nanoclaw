@@ -12,8 +12,8 @@ Use this skill when the user wants to log into LinkedIn, read their feed, check 
 
 - **Path:** `/workspace/group/linkedin-auth.json`
 - **Save after login:** `agent-browser state save linkedin-auth.json`
-- **Load before any LinkedIn task:** `agent-browser state load linkedin-auth.json`
-- **Session expiry:** If after loading state you are redirected to a login page, tell the user the session expired and they need to log in again.
+- **Load before any LinkedIn task:** open with state in one command, e.g. `agent-browser --state linkedin-auth.json open https://www.linkedin.com/feed`
+- **Session expiry:** If after opening with saved state you are redirected to a login page, tell the user the session expired and they need to log in again.
 
 ---
 
@@ -65,13 +65,13 @@ echo '{"type":"schedule_task","prompt":"...","schedule_type":"cron","schedule_va
 Copy this into the scheduled task prompt so each run knows what to do:
 
 ```
-Load the saved LinkedIn browser state: run `agent-browser state load linkedin-auth.json`, then open https://www.linkedin.com/feed`. If you are redirected to a login page, send a single message: "LinkedIn session expired — please ask me to log in again." and stop. Otherwise, scroll through the feed: run `agent-browser scroll down 600` then `agent-browser snapshot -i` repeatedly, 5–8 times, to collect visible posts. Extract the text of the main posts (ignore "Promoted" and heavy ads). Summarize the feed into a short digest: key highlights, interesting discussions, and notable updates. Send that summary as your reply to the user. Keep the summary concise and WhatsApp-friendly (no markdown headings, use bullets and bold where helpful).
+Close any stale browser, then open feed with saved state in one step: run `agent-browser close` then `agent-browser --state linkedin-auth.json open https://www.linkedin.com/feed`. If you are redirected to a login page, send a single message: "LinkedIn session expired — please ask me to log in again." and stop. Otherwise, scroll through the feed: run `agent-browser scroll down 600` then `agent-browser snapshot -i` repeatedly, 5-8 times, to collect visible posts. Extract the text of the main posts (ignore "Promoted" and heavy ads). Summarize the feed into a short digest: key highlights, interesting discussions, and notable updates. Send that summary as your reply to the user. Keep the summary concise and WhatsApp-friendly (no markdown headings, use bullets and bold where helpful).
 ```
 
 ### Manual feed summary (user asks "summarize my LinkedIn feed")
 
-1. `agent-browser state load linkedin-auth.json`
-2. `agent-browser open https://www.linkedin.com/feed`
+1. `agent-browser close`
+2. `agent-browser --state linkedin-auth.json open https://www.linkedin.com/feed`
 3. If URL contains "login", say session expired and stop
 4. Scroll 5–8 times (`agent-browser scroll down 600`), snapshot between scrolls (`agent-browser snapshot -i`), and collect post text with `agent-browser get text @eX` for relevant refs
 5. Summarize and send the digest to the user
@@ -82,8 +82,8 @@ Load the saved LinkedIn browser state: run `agent-browser state load linkedin-au
 
 When the user asks to check LinkedIn messages or summarize their inbox:
 
-1. `agent-browser state load linkedin-auth.json`
-2. `agent-browser open https://www.linkedin.com/messaging`
+1. `agent-browser close`
+2. `agent-browser --state linkedin-auth.json open https://www.linkedin.com/messaging`
 3. If redirected to login, say session expired and stop
 4. `agent-browser snapshot -i` to see the conversation list and message area
 5. Identify conversation list items (refs) and open the most recent or unread conversations
@@ -97,9 +97,9 @@ When the user asks to check LinkedIn messages or summarize their inbox:
 
 When the user asks to look up a LinkedIn profile (by name, URL, or search):
 
-1. `agent-browser state load linkedin-auth.json`
-2. If the user gave a profile URL: `agent-browser open <url>`
-   - If they gave a name or search term: `agent-browser open https://www.linkedin.com/search/results/people/?keywords=<term>`, then use snapshot to open the first relevant profile
+1. `agent-browser close`
+2. If the user gave a profile URL: `agent-browser --state linkedin-auth.json open <url>`
+   - If they gave a name or search term: `agent-browser --state linkedin-auth.json open https://www.linkedin.com/search/results/people/?keywords=<term>`, then use snapshot to open the first relevant profile
 3. If redirected to login, say session expired and stop
 4. On the profile page: `agent-browser snapshot -i` and extract headline, current role, company, and optionally recent activity or "About"
 5. Reply with a short structured summary: name, headline, current role, and any other notable details
@@ -110,8 +110,8 @@ When the user asks to look up a LinkedIn profile (by name, URL, or search):
 
 When the user asks to accept all pending LinkedIn connection invitations:
 
-1. `agent-browser state load linkedin-auth.json`
-2. `agent-browser open https://www.linkedin.com/mynetwork/invitation-manager/received/`
+1. `agent-browser close`
+2. `agent-browser --state linkedin-auth.json open https://www.linkedin.com/mynetwork/invitation-manager/received/`
 3. If redirected to login, say session expired and stop
 4. Loop until no pending invitations remain:
    - `agent-browser snapshot -i` to find visible "Accept" buttons (use refs from the snapshot, e.g. buttons labeled "Accept" or similar)
@@ -129,7 +129,7 @@ When the user asks to accept all pending LinkedIn connection invitations:
 
 ## Session expiry (all workflows)
 
-- **Before starting:** Always run `agent-browser state load linkedin-auth.json` first
+- **Before starting:** Always run `agent-browser close`, then open LinkedIn using `--state linkedin-auth.json`
 - **After navigating:** If the current URL contains "login" or the page clearly asks for sign-in, do not retry. Tell the user: "LinkedIn session has expired. Ask me to log in again and I'll re-authenticate and save the new session."
 - **After any successful login:** Always run `agent-browser state save linkedin-auth.json` before closing or moving on
 
@@ -138,8 +138,7 @@ When the user asks to accept all pending LinkedIn connection invitations:
 If a command returns an error like "Target page, context or browser has been closed" or the browser becomes unresponsive during any LinkedIn workflow:
 
 1. `agent-browser close` to shut down the crashed daemon
-2. `agent-browser state load linkedin-auth.json` to reload auth
-3. `agent-browser open <url>` to re-open the page you were on
+2. Re-open with saved auth in one command: `agent-browser --state linkedin-auth.json open <url>`
 4. If redirected to login, report session expiry as above
 5. Otherwise, resume the workflow from the current step
 
