@@ -123,7 +123,7 @@ nanoclaw/
 │   │       ├── index.ts           # Entry point (query loop, IPC polling, session resume)
 │   │       └── ipc-mcp-stdio.ts   # Stdio-based MCP server for host communication
 │   └── skills/
-│       └── agent-browser.md       # Browser automation skill
+│       └── agent-browser/SKILL.md # Browser automation skill
 │
 ├── dist/                          # Compiled JavaScript (gitignored)
 │

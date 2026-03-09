@@ -157,3 +157,31 @@ agent-browser get text @e1  # Get product title
 agent-browser get attr @e2 href  # Get link URL
 agent-browser screenshot products.png
 ```
+
+## Troubleshooting
+
+### Browser crashed or stuck
+
+If commands return errors like "Target page, context or browser has been closed" or the browser is unresponsive:
+
+```bash
+agent-browser close          # Shuts down the daemon and cleans up
+agent-browser open <url>     # Fresh daemon + browser instance
+```
+
+Always close first, then re-open. Do NOT repeatedly retry the failing command — that won't recover a crashed browser.
+
+### Recovery pattern for multi-step workflows
+
+If a crash happens mid-workflow (e.g. during form submission or login):
+
+1. `agent-browser close` to clean up
+2. `agent-browser open <url>` to start fresh
+3. If you had saved auth state, reload it: `agent-browser state load <file>`
+4. Resume the workflow from the beginning
+
+### Common crash causes
+
+- **Long-running sessions**: Chromium can accumulate memory pressure. Close and re-open between independent tasks.
+- **Heavy pages**: Pages with many iframes or media can overwhelm headless Chromium. Use `agent-browser wait --load networkidle` before interacting.
+- **Navigation timeouts**: If a page takes too long, the browser may become unresponsive. Close and retry with a simpler URL or approach.
